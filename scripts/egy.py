@@ -13,10 +13,15 @@ from datasets import Dataset
 import matplotlib.pyplot as plt
 
 
-egy_ds = load_dataset("QCRI/arabic_pos_dialect", "egy")
-glf_ds = load_dataset("QCRI/arabic_pos_dialect", "glf")
-lev_ds = load_dataset("QCRI/arabic_pos_dialect", "lev")
-mgr_ds = load_dataset("QCRI/arabic_pos_dialect", "mgr")
+# egy_ds = load_dataset("QCRI/arabic_pos_dialect", "egy") # custom: 0.2561383928571428, arat5v2: 0.26944196428571426
+# glf_ds = load_dataset("QCRI/arabic_pos_dialect", "glf") # custom: 0.36966517857142855, arat5v2: 0.38546875
+# lev_ds = load_dataset("QCRI/arabic_pos_dialect", "lev") # custom: 0.28439732142857144, arat5v2: 0.29667410714285714
+# mgr_ds = load_dataset("QCRI/arabic_pos_dialect", "mgr") # custom: 0.3828794642857143, arat5v2: 0.39872767857142855
+
+
+
+
+dialect_ds = mgr_ds
 
 
 def graph(stats):
@@ -83,7 +88,8 @@ def preprocess_example(example):
     }
 
 # # Make a DF (350 x 3) of our data.
-rows = [preprocess_example(ex) for ex in egy_ds["train"]]
+
+rows = [preprocess_example(ex) for ex in dialect_ds["train"]]
 df = pd.DataFrame(rows)
 
 
