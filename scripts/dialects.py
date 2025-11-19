@@ -88,7 +88,6 @@ def preprocess_example(example):
     }
 
 # # Make a DF (350 x 3) of our data.
-
 rows = [preprocess_example(ex) for ex in dialect_ds["train"]]
 df = pd.DataFrame(rows)
 
