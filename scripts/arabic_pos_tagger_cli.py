@@ -18,32 +18,7 @@ import torch
 ######	ID To Label Mapping	#########
 #####################################
 
-id2label = [
-    "NOUN",        # اسم
-    "VERB",        # فعل
-    "ADJ",         # صفة
-    "ADV",         # حال
-    "PRON",        # ضمير
-    "PART",        # حرف (particle / function word)
-    "INTJ",        # أداة استفهام (interjection / interrogative particle)
-    "CONJ",        # أداة عطف (conjunction)
-    "ADP",         # حرف جر (preposition)
-    "NUM",         # عدد (numeral)
-    "NEG",         # أداة نفي (negation particle)
-    "DEM",         # اسم إشارة (demonstrative pronoun)
-    "REL",         # اسم موصول (relative pronoun)
-    "INF",         # مصدر (verbal noun / infinitive)
-    "ACT",         # اسم فاعل (active participle)
-    "PASS",        # اسم مفعول (passive participle)
-    "COND",        # أداة شرط (conditional particle)
-    "ACC",         # أداة نصب (accusative particle)
-    "GEN",         # أداة جر (genitive particle)
-    "JUS",         # أداة جزم (jussive particle)
-    "EXCL",        # تعجب (exclamation)
-    "DEF",         # فعل ناقص (defective verb)
-    "PROPN",       # اسم علم (proper noun)
-    "FOREIGN",
-]
+id2label = []
 
 ##################################
 #########	Tokenizer    #########
@@ -62,6 +37,7 @@ ds = egy_ds
 
 label2id = {label:i for i,label in enumerate(id2label)}
 
+
 def preprocess_example(example):
     model_inputs = tokenizer(
         example["segments"],
@@ -70,8 +46,12 @@ def preprocess_example(example):
         is_split_into_words=True
     )
 
-    labels = [ label2id.get(tag, 23) for tag in example["pos_tags"] ]
-    print(example["pos_tags"])
+    # Fill in all parts of speech in the dataset.
+    for tag in example["pos_tags"]:
+    	if label2id.get(tag, -1) == -1:
+    		label2id[tag] = len(label2id) + 1
+
+    labels = [ label2id.get(tag) for tag in example["pos_tags"] ]
     
     # Pad
     input_ids = np.pad(model_inputs["input_ids"],
@@ -101,6 +81,9 @@ ds = Dataset.from_pandas(df.copy())
 
 # Vocab Size
 vocab_size = 44800
+
+id2label = list(label2id.keys())
+num_pos_tags = len(label2id)
 
 
 #####################################
@@ -144,12 +127,14 @@ ds.set_format(type="torch", columns=["input_ids", "labels", "attention_mask"])
 #########	BiLSTM Neural Network     #########
 ###############################################
 
+output_shape = num_pos_tags
+
 class BiLSTMCustomModel(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.embed = nn.Embedding(vocab_size, 206)
         self.bilstm = nn.LSTM(206, 200, bidirectional=True, batch_first=True)
-        self.linear = nn.Linear(400, 24)
+        self.linear = nn.Linear(400, num_pos_tags)
         self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
@@ -159,7 +144,7 @@ class BiLSTMCustomModel(PreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss = self.loss_fn(logits.view(-1, 24), labels.view(-1))
+            loss = self.loss_fn(logits.view(-1, num_pos_tags), labels.view(-1))
 
         return TokenClassifierOutput(
             loss=loss,
