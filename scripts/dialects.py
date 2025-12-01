@@ -11,18 +11,26 @@ import torch.nn as nn
 from transformers import PretrainedConfig
 from datasets import Dataset
 import matplotlib.pyplot as plt
+from transformers.modeling_outputs import TokenClassifierOutput
+from transformers import AutoModelForSeq2SeqLM
+import evaluate
+import torch
 
+##################################################
+#########   Load the DS Appropriately    #########
+##################################################
 
-egy_ds = load_dataset("QCRI/arabic_pos_dialect", "egy") # custom: 0.2561383928571428, arat5v2: 0.26944196428571426
-# glf_ds = load_dataset("QCRI/arabic_pos_dialect", "glf") # custom: 0.36966517857142855, arat5v2: 0.38546875
-# lev_ds = load_dataset("QCRI/arabic_pos_dialect", "lev") # custom: 0.28439732142857144, arat5v2: 0.29667410714285714
-# mgr_ds = load_dataset("QCRI/arabic_pos_dialect", "mgr") # custom: 0.3828794642857143, arat5v2: 0.39872767857142855
-
-
-
+egy_ds = load_dataset("QCRI/arabic_pos_dialect", "egy")
+glf_ds = load_dataset("QCRI/arabic_pos_dialect", "glf")
+lev_ds = load_dataset("QCRI/arabic_pos_dialect", "lev")
+mgr_ds = load_dataset("QCRI/arabic_pos_dialect", "mgr")
 
 dialect_ds = egy_ds
 
+
+######################################
+#########   Graph Results    #########
+######################################
 
 def graph(stats):
 	labels = list(stats.keys())
@@ -87,34 +95,44 @@ def preprocess_example(example):
         "attention_mask": attn_mask
     }
 
-# # Make a DF (350 x 3) of our data.
 rows = [preprocess_example(ex) for ex in dialect_ds["train"]]
 df = pd.DataFrame(rows)
-
-
-training_args = Seq2SeqTrainingArguments(
-    output_dir="./seq2seq_output",           # Required: directory for saving model checkpoints
-    num_train_epochs=1,                      # Total number of training epochs
-    per_device_train_batch_size=2,           # Batch size per device during training
-    per_device_eval_batch_size=2,            # Batch size for evaluation
-    learning_rate=2e-5,                      # The initial learning rate
-    weight_decay=0.01,                       # Strength of weight decay
-    logging_dir="./logs",                    # Directory for storing logs
-    predict_with_generate=True,              # Use generate to compute the evaluation metrics
-    evaluation_strategy="steps",  			 # Evaluate every `eval_steps`
-    eval_steps=500,
-    use_mps_device=False
-)
-
-
-
 ds = Dataset.from_pandas(df.copy())
 
-from transformers import AutoModelForSeq2SeqLM
-import evaluate
+MAX_LEN = 128
+def fix_dataset(batch):
+    input_ids = []
+    labels = []
+    attention_mask = []
 
-model_name = "UBC-NLP/AraT5v2-base-1024"
-model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    for i in range(len(batch["input_ids"])):
+        # input_ids
+        ids = batch["input_ids"][i][:MAX_LEN]
+        ids += [0] * (MAX_LEN - len(ids))
+        input_ids.append(ids)
+
+        # labels
+        lab = batch["labels"][i][:MAX_LEN]
+        lab += [0] * (MAX_LEN - len(lab))
+        labels.append(lab)
+
+        # attention_mask
+        mask = batch["attention_mask"][i][:MAX_LEN]
+        mask += [0] * (MAX_LEN - len(mask))
+        attention_mask.append(mask)
+
+    # Convert to tensors
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "labels": torch.tensor(labels, dtype=torch.long),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long)
+    }
+
+
+#######################################
+#########   Compute Metrcs    #########
+#######################################
+
 
 accuracy_metric = evaluate.load("accuracy")
 
@@ -135,7 +153,7 @@ def compute_metrics(eval_pred):
     return accuracy_metric.compute(predictions=new_predictions.flatten(), references=new_label_ids.flatten())
 
 
-#compute metrics 2 (custom architecture)
+# Compute metrics 2 (Custom Architecture - Simple Linear Layer)
 def compute_metrics_two(eval_pred):
     logits, labels = eval_pred
     
@@ -158,6 +176,42 @@ def compute_metrics_two(eval_pred):
         references=labels.flatten()
     )
 
+# Compute metrics 3 (Custom Architecture - BiLSTM)
+def compute_metrics_three(eval_pred):
+    logits = eval_pred.predictions
+    labels = eval_pred.label_ids
+    preds = np.argmax(logits, axis=-1)
+
+    preds_flat = preds.flatten()
+    labels_flat = labels.flatten()
+
+    mask = labels_flat != -100
+    preds_flat = preds_flat[mask]
+    labels_flat = labels_flat[mask]
+
+    return accuracy_metric.compute(predictions=preds_flat, references=labels_flat)
+
+
+#########################################
+#########   Pretrained Model    #########
+#########################################
+
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir="./seq2seq_output",           
+    num_train_epochs=20,                      
+    per_device_train_batch_size=2,           
+    per_device_eval_batch_size=2,            
+    learning_rate=2e-5,                      
+    weight_decay=0.01,                       
+    logging_dir="./logs",                    
+    predict_with_generate=True,              
+    evaluation_strategy="steps",             
+    eval_steps=500,
+    use_mps_device=False
+)
 
 trainer = Seq2SeqTrainer(
     model=model,
@@ -167,14 +221,38 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics
 )
 
+# Training Results
+# trainer.train()
+# stats = trainer.evaluate()
+# print(stats)
+# graph(stats)
+
+
+# Test Results
+# Custom split (70/30)
+split_dataset = ds.train_test_split(test_size=0.3, seed=42) # Seed for reproducibility
+
+# Access the resulting splits
+train_dataset = split_dataset['train']
+test_dataset = split_dataset['test']
+
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=train_dataset,
+    compute_metrics=compute_metrics
+)
+
 trainer.train()
-stats = trainer.evaluate()
+stats = trainer.evaluate(test_dataset)
 print(stats)
 graph(stats)
 
 
-# Now, we will experiment with custom architecture.
-# This is an example of a basic, bare bones, neural network.
+##################################################
+#########   Embeddings + Linear Model    #########
+##################################################
 
 
 # Vocab size.
@@ -212,6 +290,12 @@ class MySeq2SeqModel(PreTrainedModel):
             )
         return Seq2SeqLMOutput(logits=logits, loss=loss)
 
+ds = Dataset.from_pandas(df.copy())
+ds = ds.map(fix_dataset, batched=True)
+ds.set_format(type="torch", columns=["input_ids", "labels", "attention_mask"])
+
+config = PretrainedConfig()
+model = MySeq2SeqModel(config)
 
 # Define our training args.
 training_args = Seq2SeqTrainingArguments(
@@ -221,10 +305,10 @@ training_args = Seq2SeqTrainingArguments(
     do_eval=True,
     per_device_train_batch_size=16,    # adjust based on your GPU memory
     per_device_eval_batch_size=16,     
-    learning_rate=5e-4,                # decent starting LR for small models
+    learning_rate=2e-5,                # decent starting LR for small models
     weight_decay=0.01,                 # regularization
     save_total_limit=2,                # keep last 2 checkpoints
-    num_train_epochs=1,                # can increase if dataset is small
+    num_train_epochs=20, #1               # can increase if dataset is small
     logging_dir="./logs",              # logs for tensorboard
     logging_steps=10,                  # log every 10 steps
     save_steps=50,                     # checkpoint frequency
@@ -237,48 +321,6 @@ training_args = Seq2SeqTrainingArguments(
 )
 
 
-
-# Now, we need to clean off our dataset for our custom model.
-ds = Dataset.from_pandas(df.copy())
-import torch
-
-MAX_LEN = 128
-
-def fix_dataset(batch):
-    input_ids = []
-    labels = []
-    attention_mask = []
-
-    for i in range(len(batch["input_ids"])):
-        # input_ids
-        ids = batch["input_ids"][i][:MAX_LEN]
-        ids += [0] * (MAX_LEN - len(ids))
-        input_ids.append(ids)
-
-        # labels
-        lab = batch["labels"][i][:MAX_LEN]
-        lab += [0] * (MAX_LEN - len(lab))
-        labels.append(lab)
-
-        # attention_mask
-        mask = batch["attention_mask"][i][:MAX_LEN]
-        mask += [0] * (MAX_LEN - len(mask))
-        attention_mask.append(mask)
-
-    # Convert to tensors
-    return {
-        "input_ids": torch.tensor(input_ids, dtype=torch.long),
-        "labels": torch.tensor(labels, dtype=torch.long),
-        "attention_mask": torch.tensor(attention_mask, dtype=torch.long)
-    }
-
-ds = ds.map(fix_dataset, batched=True)
-ds.set_format(type="torch", columns=["input_ids", "labels", "attention_mask"])
-
-config = PretrainedConfig()
-model = MySeq2SeqModel(config)
-
-
 trainer = Seq2SeqTrainer(
     model=model,
     args=training_args,
@@ -287,10 +329,222 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics_two
 )
 
+# Training Only Results
+# trainer.train()
+# stats = trainer.evaluate(ds)
+# print(stats)
+# graph(stats)
+
+
+# Test Results
+split_dataset = ds.train_test_split(test_size=0.3, seed=42)
+
+# Access the resulting splits
+train_dataset = split_dataset['train']
+test_dataset = split_dataset['test']
+
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=train_dataset,
+    compute_metrics=compute_metrics_two
+)
+
+# Test Results
 trainer.train()
-stats = trainer.evaluate(ds)
+stats = trainer.evaluate(test_dataset)
 print(stats)
 graph(stats)
+
+
+
+###########################################
+#########   BiLSTM Custom Model   #########
+###########################################
+
+
+class BiLSTMCustomModel(PreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.embed = nn.Embedding(vocab_size, 206)
+        self.bilstm = nn.LSTM(206, 200, bidirectional=True, batch_first=True)
+        self.linear = nn.Linear(400, 24)
+        self.loss_fn = nn.CrossEntropyLoss()
+
+    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
+        x = self.embed(input_ids)
+        lstm_out, _ = self.bilstm(x)
+        logits = self.linear(lstm_out)
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_fn(logits.view(-1, 24), labels.view(-1))
+
+        return TokenClassifierOutput(
+            loss=loss,
+            logits=logits
+            )
+
+
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir="./seq2seq_output",           # Required: directory for saving model checkpoints
+    num_train_epochs=20,                      # Total number of training epochs
+    per_device_train_batch_size=2,           # Batch size per device during training
+    per_device_eval_batch_size=2,            # Batch size for evaluation
+    learning_rate=2e-5,                      # The initial learning rate
+    weight_decay=0.01,                       # Strength of weight decay
+    logging_dir="./logs",                    # Directory for storing logs
+    predict_with_generate=False,              # Use generate to compute the evaluation metrics
+    evaluation_strategy="steps",             # Evaluate every `eval_steps`
+    eval_steps=500,
+    use_mps_device=False
+)
+
+config = PretrainedConfig()
+model = BiLSTMCustomModel(config)
+
+# Train
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=ds,
+    eval_dataset=ds,
+    compute_metrics=compute_metrics_three
+)
+
+# trainer.train()
+# stats = trainer.evaluate(test_dataset)
+# print(stats)
+# graph(stats)
+
+# Test Results
+split_dataset = ds.train_test_split(test_size=0.3, seed=42) # Seed for reproducibility
+train_dataset = split_dataset['train']
+test_dataset = split_dataset['test']
+
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=train_dataset,
+    compute_metrics=compute_metrics_three
+)
+
+trainer.train()
+stats = trainer.evaluate(test_dataset)
+print(stats)
+graph(stats)
+
+###########################################
+#########   Encoder Decoder       #########
+###########################################
+
+training_args = Seq2SeqTrainingArguments(
+    output_dir="./seq2seq_output",           # Required: directory for saving model checkpoints
+    num_train_epochs=20,                      # Total number of training epochs
+    per_device_train_batch_size=2,           # Batch size per device during training
+    per_device_eval_batch_size=2,            # Batch size for evaluation
+    learning_rate=2e-5,                      # The initial learning rate
+    weight_decay=0.01,                       # Strength of weight decay
+    logging_dir="./logs",                    # Directory for storing logs
+    predict_with_generate=False,              # Use generate to compute the evaluation metrics
+    evaluation_strategy="steps",             # Evaluate every `eval_steps`
+    eval_steps=500,
+    use_mps_device=False
+)
+
+
+class EncoderDecoderModel(PreTrainedModel):
+    def __init__(self, config, vocab_size=vocab_size, hidden_size=256, nhead=8, num_layers=2):
+        super().__init__(config)
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        
+        # Embeddings
+        self.encoder_embed = nn.Embedding(vocab_size, hidden_size)
+        self.decoder_embed = nn.Embedding(vocab_size, hidden_size)
+        
+        # Encoder & Decoder
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=nhead)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        decoder_layer = nn.TransformerDecoderLayer(d_model=hidden_size, nhead=nhead)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        
+        # Output projection
+        self.linear = nn.Linear(hidden_size, vocab_size)
+        
+        # Loss function
+        self.loss_fn = nn.CrossEntropyLoss()
+    
+    def forward(self, input_ids=None, attention_mask=None, decoder_input_ids=None, labels=None):
+        # Encoder
+        enc_emb = self.encoder_embed(input_ids)  # [batch, seq, hidden]
+        enc_emb = enc_emb.transpose(0, 1)        # Transformer expects [seq, batch, hidden]
+        memory = self.encoder(enc_emb)           # [seq, batch, hidden]
+        
+        # Decoder
+        dec_emb = self.decoder_embed(decoder_input_ids)
+        dec_emb = dec_emb.transpose(0, 1)
+        # Generate tgt_mask for causal decoding
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(dec_emb.size(0)).to(dec_emb.device)
+        output = self.decoder(dec_emb, memory, tgt_mask=tgt_mask)
+        
+        output = output.transpose(0, 1)  # back to [batch, seq, hidden]
+        logits = self.linear(output)
+        
+        loss = None
+        if labels is not None:
+            loss = self.loss_fn(
+                logits.view(-1, self.vocab_size),
+                labels.view(-1)
+            )
+        
+        return Seq2SeqLMOutput(logits=logits, loss=loss)
+
+
+config = PretrainedConfig()
+model = EncoderDecoderModel(config)
+
+split_dataset = ds.train_test_split(test_size=0.3, seed=42) # Seed for reproducibility
+
+# Access the resulting splits
+train_dataset = split_dataset['train']
+test_dataset = split_dataset['test']
+
+# Train
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=ds,
+    eval_dataset=ds,
+    compute_metrics=compute_metrics_three
+)
+
+# trainer.train()
+# stats = trainer.evaluate(test_dataset)
+# print(stats)
+# graph(stats)
+
+# Test Results
+
+trainer = Seq2SeqTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=train_dataset,
+    compute_metrics=compute_metrics_three
+)
+
+trainer.train()
+stats = trainer.evaluate(test_dataset)
+print(stats)
+graph(stats)
+
+
+
 
 
 

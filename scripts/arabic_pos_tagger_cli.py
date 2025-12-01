@@ -14,6 +14,36 @@ from transformers.modeling_outputs import TokenClassifierOutput
 import torch
 
 
+#####################################
+######	ID To Label Mapping	#########
+#####################################
+
+id2label = [
+    "NOUN",        # اسم
+    "VERB",        # فعل
+    "ADJ",         # صفة
+    "ADV",         # حال
+    "PRON",        # ضمير
+    "PART",        # حرف (particle / function word)
+    "INTJ",        # أداة استفهام (interjection / interrogative particle)
+    "CONJ",        # أداة عطف (conjunction)
+    "ADP",         # حرف جر (preposition)
+    "NUM",         # عدد (numeral)
+    "NEG",         # أداة نفي (negation particle)
+    "DEM",         # اسم إشارة (demonstrative pronoun)
+    "REL",         # اسم موصول (relative pronoun)
+    "INF",         # مصدر (verbal noun / infinitive)
+    "ACT",         # اسم فاعل (active participle)
+    "PASS",        # اسم مفعول (passive participle)
+    "COND",        # أداة شرط (conditional particle)
+    "ACC",         # أداة نصب (accusative particle)
+    "GEN",         # أداة جر (genitive particle)
+    "JUS",         # أداة جزم (jussive particle)
+    "EXCL",        # تعجب (exclamation)
+    "DEF",         # فعل ناقص (defective verb)
+    "PROPN",       # اسم علم (proper noun)
+    "FOREIGN",
+]
 
 ##################################
 #########	Tokenizer    #########
@@ -23,15 +53,14 @@ model_name = "UBC-NLP/AraT5v2-base-1024"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 max_length = 128
 
-
-
-
 ##################################
 #########	Dataset      #########
 ##################################
 
 egy_ds = load_dataset("QCRI/arabic_pos_dialect", "egy")
 ds = egy_ds
+
+label2id = {label:i for i,label in enumerate(id2label)}
 
 def preprocess_example(example):
     model_inputs = tokenizer(
@@ -41,19 +70,15 @@ def preprocess_example(example):
         is_split_into_words=True
     )
 
-    labels = tokenizer(
-        example["pos_tags"],
-        max_length=max_length,
-        truncation=True,
-        is_split_into_words=True
-    )
+    labels = [ label2id.get(tag, 23) for tag in example["pos_tags"] ]
+    print(example["pos_tags"])
     
     # Pad
     input_ids = np.pad(model_inputs["input_ids"],
                        (0, max_length - len(model_inputs["input_ids"])),
                        mode='constant')
-    label_ids = np.pad(labels["input_ids"],
-                       (0, max_length - len(labels["input_ids"])),
+    label_ids = np.pad(labels,
+                       (0, max_length - len(labels)),
                        mode='constant')
     attn_mask = np.pad(model_inputs["attention_mask"],
                        (0, max_length - len(model_inputs["attention_mask"])),
@@ -179,37 +204,6 @@ trainer = Seq2SeqTrainer(
 
 trainer.train()
 
-#####################################
-######	ID To Label Mapping	#########
-#####################################
-
-id2label = [
-    "NOUN",        # 0
-    "VERB",        # 1
-    "ADJ",         # 2
-    "ADV",         # 3
-    "PRON",        # 4
-    "PROPN",       # 5
-    "DET",         # 6
-    "ADP",         # 7 (prepositions)
-    "CONJ",        # 8 (coordinating conjunctions)
-    "SCONJ",       # 9 (subordinating conjunctions)
-    "PART",        # 10 (particles)
-    "NUM",         # 11
-    "INTJ",        # 12 (interjections)
-    "PUNCT",       # 13
-    "AUX",         # 14 (auxiliary verbs)
-    "NEG",         # 15 (negation particles)
-    "PRT",         # 16 (clitics/other particles)
-    "CASE",        # 17 (case markers or dialectal endings)
-    "DET+NOUN",    # 18 (common fused form in dialect)
-    "PRON_SUFF",   # 19 (attached pronoun)
-    "VERB_IMP",    # 20 (imperative verb)
-    "VERB_PERF",   # 21 (perfect verb)
-    "VERB_IMPF",   # 22 (imperfect verb)
-    "FOREIGN"      # 23 (foreign words)
-]
-
 #################################################
 ######	Run a Loop to Tag Arabic Words	#########
 #################################################
@@ -241,6 +235,7 @@ while resume:
 		})
 	predictions = trainer.predict(predict_dataset)
 	logits = predictions.predictions
+	print(logits.shape)
 	pred_ids = np.argmax(logits, axis=-1) 
 	pos_labels = [id2label[i] for i in pred_ids]
 	masked_labels = [
