@@ -212,7 +212,7 @@ model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
 training_args = Seq2SeqTrainingArguments(
     output_dir="./seq2seq_output",           
-    num_train_epochs=20,                      
+    num_train_epochs=1,                      
     per_device_train_batch_size=2,           
     per_device_eval_batch_size=2,            
     learning_rate=2e-5,                      
@@ -255,10 +255,10 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics
 )
 
-# trainer.train()
-# stats = trainer.evaluate(test_dataset)
-# print(stats)
-# graph(stats)
+trainer.train()
+stats = trainer.evaluate(test_dataset)
+print(stats)
+graph(stats)
 
 
 ##################################################
@@ -459,7 +459,7 @@ graph(stats)
 
 training_args = Seq2SeqTrainingArguments(
     output_dir="./seq2seq_output",           # Required: directory for saving model checkpoints
-    num_train_epochs=20,                      # Total number of training epochs
+    num_train_epochs=1,                      # Total number of training epochs
     per_device_train_batch_size=2,           # Batch size per device during training
     per_device_eval_batch_size=2,            # Batch size for evaluation
     learning_rate=2e-5,                      # The initial learning rate
