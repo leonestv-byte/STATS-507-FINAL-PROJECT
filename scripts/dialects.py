@@ -27,6 +27,12 @@ mgr_ds = load_dataset("QCRI/arabic_pos_dialect", "mgr")
 
 dialect_ds = egy_ds
 
+#####################################
+######  ID To Label Mapping #########
+#####################################
+
+id2label = []
+
 
 ######################################
 #########   Graph Results    #########
@@ -60,6 +66,8 @@ model_name = "UBC-NLP/AraT5v2-base-1024"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 max_length = 128
 
+label2id = {label:i for i,label in enumerate(id2label)}
+
 
 # We take an example (segments, pos_tags)
 def preprocess_example(example):
@@ -70,19 +78,19 @@ def preprocess_example(example):
         is_split_into_words=True
     )
 
-    labels = tokenizer(
-        example["pos_tags"],
-        max_length=max_length,
-        truncation=True,
-        is_split_into_words=True
-    )
+    # Fill in all parts of speech in the dataset.
+    for tag in example["pos_tags"]:
+        if label2id.get(tag, -1) == -1:
+            label2id[tag] = len(label2id) + 1
+
+    labels = [ label2id.get(tag) for tag in example["pos_tags"] ]
     
     # pad model_inputs, labels, attn_mask
     input_ids = np.pad(model_inputs["input_ids"],
                        (0, max_length - len(model_inputs["input_ids"])),
                        mode='constant')
-    label_ids = np.pad(labels["input_ids"],
-                       (0, max_length - len(labels["input_ids"])),
+    label_ids = np.pad(labels,
+                       (0, max_length - len(labels)),
                        mode='constant')
     attn_mask = np.pad(model_inputs["attention_mask"],
                        (0, max_length - len(model_inputs["attention_mask"])),
@@ -99,7 +107,7 @@ rows = [preprocess_example(ex) for ex in dialect_ds["train"]]
 df = pd.DataFrame(rows)
 ds = Dataset.from_pandas(df.copy())
 
-MAX_LEN = 128
+
 def fix_dataset(batch):
     input_ids = []
     labels = []
@@ -107,18 +115,18 @@ def fix_dataset(batch):
 
     for i in range(len(batch["input_ids"])):
         # input_ids
-        ids = batch["input_ids"][i][:MAX_LEN]
-        ids += [0] * (MAX_LEN - len(ids))
+        ids = batch["input_ids"][i][:max_length]
+        ids += [0] * (max_length- len(ids))
         input_ids.append(ids)
 
         # labels
-        lab = batch["labels"][i][:MAX_LEN]
-        lab += [0] * (MAX_LEN - len(lab))
+        lab = batch["labels"][i][:max_length]
+        lab += [0] * (max_length- len(lab))
         labels.append(lab)
 
         # attention_mask
-        mask = batch["attention_mask"][i][:MAX_LEN]
-        mask += [0] * (MAX_LEN - len(mask))
+        mask = batch["attention_mask"][i][:max_length]
+        mask += [0] * (max_length - len(mask))
         attention_mask.append(mask)
 
     # Convert to tensors
@@ -127,6 +135,9 @@ def fix_dataset(batch):
         "labels": torch.tensor(labels, dtype=torch.long),
         "attention_mask": torch.tensor(attention_mask, dtype=torch.long)
     }
+
+id2label = list(label2id.keys())
+num_pos_tags = len(label2id)
 
 
 #######################################
@@ -244,10 +255,10 @@ trainer = Seq2SeqTrainer(
     compute_metrics=compute_metrics
 )
 
-trainer.train()
-stats = trainer.evaluate(test_dataset)
-print(stats)
-graph(stats)
+# trainer.train()
+# stats = trainer.evaluate(test_dataset)
+# print(stats)
+# graph(stats)
 
 
 ##################################################
@@ -259,6 +270,8 @@ graph(stats)
 # There are ~44800 vocabulary words in arabic.
 vocab_size = 44800
 
+# Output Shape
+output_shape = num_pos_tags
 
 # This is our custom Sequence2Sequence model. 
 #
@@ -276,7 +289,7 @@ class MySeq2SeqModel(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.embed = nn.Embedding(vocab_size, 206)
-        self.linear = nn.Linear(206, vocab_size)
+        self.linear = nn.Linear(206, output_shape)
         self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
@@ -285,7 +298,7 @@ class MySeq2SeqModel(PreTrainedModel):
         loss = None
         if labels is not None:
             loss = self.loss_fn(
-                logits.view(-1, vocab_size),
+                logits.view(-1, output_shape),
                 labels.view(-1)
             )
         return Seq2SeqLMOutput(logits=logits, loss=loss)
@@ -308,7 +321,7 @@ training_args = Seq2SeqTrainingArguments(
     learning_rate=2e-5,                # decent starting LR for small models
     weight_decay=0.01,                 # regularization
     save_total_limit=2,                # keep last 2 checkpoints
-    num_train_epochs=20, #1               # can increase if dataset is small
+    num_train_epochs=100, #1               # can increase if dataset is small
     logging_dir="./logs",              # logs for tensorboard
     logging_steps=10,                  # log every 10 steps
     save_steps=50,                     # checkpoint frequency
@@ -363,13 +376,16 @@ graph(stats)
 #########   BiLSTM Custom Model   #########
 ###########################################
 
+# Output Shape
+output_shape = num_pos_tags
+
 
 class BiLSTMCustomModel(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.embed = nn.Embedding(vocab_size, 206)
         self.bilstm = nn.LSTM(206, 200, bidirectional=True, batch_first=True)
-        self.linear = nn.Linear(400, 24)
+        self.linear = nn.Linear(400, output_shape)
         self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
@@ -379,7 +395,7 @@ class BiLSTMCustomModel(PreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss = self.loss_fn(logits.view(-1, 24), labels.view(-1))
+            loss = self.loss_fn(logits.view(-1, output_shape), labels.view(-1))
 
         return TokenClassifierOutput(
             loss=loss,
@@ -456,6 +472,9 @@ training_args = Seq2SeqTrainingArguments(
 )
 
 
+# Output Shape
+output_shape = num_pos_tags
+
 class EncoderDecoderModel(PreTrainedModel):
     def __init__(self, config, vocab_size=vocab_size, hidden_size=256, nhead=8, num_layers=2):
         super().__init__(config)
@@ -474,7 +493,7 @@ class EncoderDecoderModel(PreTrainedModel):
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         
         # Output projection
-        self.linear = nn.Linear(hidden_size, vocab_size)
+        self.linear = nn.Linear(hidden_size, output_shape)
         
         # Loss function
         self.loss_fn = nn.CrossEntropyLoss()
@@ -486,7 +505,7 @@ class EncoderDecoderModel(PreTrainedModel):
         memory = self.encoder(enc_emb)           # [seq, batch, hidden]
         
         # Decoder
-        dec_emb = self.decoder_embed(decoder_input_ids)
+        dec_emb = self.decoder_embed(labels)
         dec_emb = dec_emb.transpose(0, 1)
         # Generate tgt_mask for causal decoding
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(dec_emb.size(0)).to(dec_emb.device)
@@ -498,7 +517,7 @@ class EncoderDecoderModel(PreTrainedModel):
         loss = None
         if labels is not None:
             loss = self.loss_fn(
-                logits.view(-1, self.vocab_size),
+                logits.view(-1, output_shape),
                 labels.view(-1)
             )
         

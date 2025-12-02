@@ -12,6 +12,8 @@ from transformers.modeling_outputs import Seq2SeqLMOutput
 from torch.utils.data import TensorDataset
 from transformers.modeling_outputs import TokenClassifierOutput
 import torch
+import evaluate
+import matplotlib.pyplot as plt
 
 
 #####################################
@@ -134,7 +136,7 @@ class BiLSTMCustomModel(PreTrainedModel):
         super().__init__(config)
         self.embed = nn.Embedding(vocab_size, 206)
         self.bilstm = nn.LSTM(206, 200, bidirectional=True, batch_first=True)
-        self.linear = nn.Linear(400, num_pos_tags)
+        self.linear = nn.Linear(400, output_shape)
         self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
@@ -144,7 +146,7 @@ class BiLSTMCustomModel(PreTrainedModel):
 
         loss = None
         if labels is not None:
-            loss = self.loss_fn(logits.view(-1, num_pos_tags), labels.view(-1))
+            loss = self.loss_fn(logits.view(-1, output_shape), labels.view(-1))
 
         return TokenClassifierOutput(
             loss=loss,
@@ -188,6 +190,72 @@ trainer = Seq2SeqTrainer(
 
 
 trainer.train()
+
+###################################################
+#########   Gather 70/30 Split Metric     #########
+###################################################
+
+# accuracy_metric = evaluate.load("accuracy")
+
+# def graph(stats):
+#     labels = list(stats.keys())
+#     values = list(stats.values())
+#     plt.figure(figsize=(10, 5))
+#     bars = plt.bar(labels, values)
+
+#     # Add labels on top of each bar
+#     for bar, value in zip(bars, values):
+#         height = bar.get_height()
+#         plt.text(
+#             bar.get_x() + bar.get_width() / 2,
+#             height,
+#             f"{value:.3f}",
+#             ha='center',
+#             va='bottom'
+#         )
+
+#     plt.xticks(rotation=45, ha='right')
+#     plt.ylabel("Value")
+#     plt.title("Evaluation Statistics")
+#     plt.tight_layout()
+#     plt.show()
+
+# def compute_metrics_three(eval_pred):
+#     logits = eval_pred.predictions
+#     labels = eval_pred.label_ids
+#     preds = np.argmax(logits, axis=-1)
+
+#     preds_flat = preds.flatten()
+#     labels_flat = labels.flatten()
+
+#     mask = labels_flat != -100
+#     preds_flat = preds_flat[mask]
+#     labels_flat = labels_flat[mask]
+
+#     return accuracy_metric.compute(predictions=preds_flat, references=labels_flat)
+
+
+# split_dataset = ds.train_test_split(test_size=0.3, seed=42)
+
+# train_dataset = split_dataset['train']
+# test_dataset = split_dataset['test']
+
+# trainer = Seq2SeqTrainer(
+#     model=model,
+#     args=training_args,
+#     train_dataset=train_dataset,
+#     eval_dataset=test_dataset,
+#     compute_metrics=compute_metrics_three
+# )
+
+# trainer.train()
+# stats = trainer.evaluate(test_dataset)
+# print(stats)
+# graph(stats)
+
+
+
+
 
 #################################################
 ######	Run a Loop to Tag Arabic Words	#########
