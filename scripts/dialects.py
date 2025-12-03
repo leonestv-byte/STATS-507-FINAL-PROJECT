@@ -15,6 +15,7 @@ from transformers.modeling_outputs import TokenClassifierOutput
 from transformers import AutoModelForSeq2SeqLM
 import evaluate
 import torch
+from datasets import concatenate_datasets
 
 ##################################################
 #########   Load the DS Appropriately    #########
@@ -104,6 +105,19 @@ def preprocess_example(example):
     }
 
 rows = [preprocess_example(ex) for ex in dialect_ds["train"]]
+# rows_egy = [preprocess_example(ex) for ex in egy_ds["train"]]
+# rows_lev = [preprocess_example(ex) for ex in lev_ds["train"]]
+# rows_mgr = [preprocess_example(ex) for ex in mgr_ds["train"]]
+# rows_glf = [preprocess_example(ex) for ex in glf_ds["train"]]
+# df_egy = pd.DataFrame(rows_egy)
+# df_lev = pd.DataFrame(rows_lev)
+# df_mgr = pd.DataFrame(rows_mgr)
+# df_glf = pd.DataFrame(rows_glf)
+# df = pd.concat(
+#     [df_egy, df_lev, df_mgr, df_glf],
+#     axis=0,        # stack rows
+#     ignore_index=True  # reset index
+# )
 df = pd.DataFrame(rows)
 ds = Dataset.from_pandas(df.copy())
 
@@ -281,9 +295,10 @@ output_shape = num_pos_tags
 # (if we have up to 128 tokens, embeddings up to 206 for the hidden layer).
 #
 # The linear layer is a typical linear layer.
-# W is a matrix R^(206x44800)
-# b is a bias term, R^(44800).
-# output = xW + b, R^(128x44800)
+# We define the output layer shape, our number of output classes, as P.
+# W is a matrix R^(206xP)
+# b is a bias term, R^(P).
+# output = xW + b, R^(128xP)
 #
 class MySeq2SeqModel(PreTrainedModel):
     def __init__(self, config):
@@ -321,7 +336,7 @@ training_args = Seq2SeqTrainingArguments(
     learning_rate=2e-5,                # decent starting LR for small models
     weight_decay=0.01,                 # regularization
     save_total_limit=2,                # keep last 2 checkpoints
-    num_train_epochs=100, #1               # can increase if dataset is small
+    num_train_epochs=20, #1               # can increase if dataset is small
     logging_dir="./logs",              # logs for tensorboard
     logging_steps=10,                  # log every 10 steps
     save_steps=50,                     # checkpoint frequency
@@ -459,7 +474,7 @@ graph(stats)
 
 training_args = Seq2SeqTrainingArguments(
     output_dir="./seq2seq_output",           # Required: directory for saving model checkpoints
-    num_train_epochs=1,                      # Total number of training epochs
+    num_train_epochs=20,                      # Total number of training epochs
     per_device_train_batch_size=2,           # Batch size per device during training
     per_device_eval_batch_size=2,            # Batch size for evaluation
     learning_rate=2e-5,                      # The initial learning rate
